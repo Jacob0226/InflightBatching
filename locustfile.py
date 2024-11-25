@@ -7,6 +7,12 @@ import orjson
 import time
 import threading
 from transformers import AutoTokenizer
+import random
+from datetime import datetime
+import pytz
+
+worker_data = {"#Req": [], "E2E": [], "TTFT": [], "TPOT": [], "Target":None}
+master_data = {"#Req": [], "E2E": [], "TTFT": [], "TPOT": [], "Target":None}
 
 class LLMUser(HttpUser):
     # RPS / QPS
@@ -18,14 +24,19 @@ class LLMUser(HttpUser):
         self.server = self.environment.parsed_options.server
         self.endpoint = self.environment.parsed_options.endpoint
         self.output_tokens = self.environment.parsed_options.olen
-        self.output_folder = self.environment.parsed_options.out
-        if self.output_folder:
-            os.makedirs(self.output_folder, exist_ok=True)
+        self.target = self.environment.parsed_options.target
 
         # Load dataset
         self.input_datafile = self.environment.parsed_options.ifile      
         with open(self.input_datafile, 'r') as file:
             self.prompt = file.read() 
+        self.words = self.prompt.split()
+        self.prompts = []
+        for i in range(100): # Generate random prompt
+            random.shuffle(self.words)
+            self.prompts.append(' '.join(self.words))
+        self.prompt_idx = 0
+
                
         server_common_config = {
             "max_tokens": self.output_tokens, 
@@ -35,7 +46,7 @@ class LLMUser(HttpUser):
         }
         vLLM_config = {
             "model": self.environment.parsed_options.hf_model,
-            "prompt": self.prompt,      # "What is machine learning?"      
+            "prompt": self.prompt,
             "ignore_eos": True                
         }
         triton_config = {
@@ -73,6 +84,12 @@ class LLMUser(HttpUser):
 
     @task
     def SendRequest(self):
+        # if self.server == "vLLM":
+        #     self.data["prompt"] = self.prompts[self.prompt_idx]
+        # elif self.server == "Triton":
+        #     self.data["text_input"] = self.prompts[self.prompt_idx]
+        # self.prompt_idx=(1+self.prompt_idx)%100
+        
         t_start = time.perf_counter()
         with self.client.post(
             self.endpoint,
@@ -128,7 +145,8 @@ class LLMUser(HttpUser):
             #       f"E2E_Latency(s) = {E2E_Latency:.2f}, TTFT(s)={TTFT:.2f}, TPOT(s)={TPOT:.3f} \n"
             #       f"# output tokens: {len(self.tokenizer.encode(combined_text))}, required output tokens: {self.output_tokens} \n"
             #       f"Prompt: {self.data['prompt'][:1000]}  \n"
-            #       f"Generated tokens: {combined_text}")
+            #       f"Generated tokens: {combined_text}\n"
+            #       f"------------------\n")
             self.n_completed_request += 1
             self.E2E.append(E2E_Latency)
             self.TTFT.append(TTFT)
@@ -145,41 +163,85 @@ class LLMUser(HttpUser):
             avg_TTFT = sum(self.TTFT) / self.n_completed_request
             avg_TPOT = sum(self.TPOT) / self.n_completed_request
         
-        if self.id<8:
-            print("Only show the first 8 users results:")
-            print(f"User #{self.id:3d}, Completed Request = {self.n_completed_request:3d}, "
-                f"avg_E2E_Latency(s) = {avg_E2E:.2f}, avg_TTFT(s) = {avg_TTFT:.2f}, avg_TPOT(s) = {avg_TPOT:.3f} ")
-
-        # Save result
-        # Save to a JSON file
-        if self.output_folder:
-            json_file = os.path.join(self.output_folder,  f"benchmark_{self.id:02}.json")
-            with open(json_file, 'w') as json_file:
-                data = {
-                    "E2E": self.E2E,
-                    "TTFT": self.TTFT,
-                    "TPOT": self.TPOT
-                }
-                json.dump(data, json_file, indent=4)  # 'indent=4' for pretty formatting
+        worker_data["#Req"].append(self.n_completed_request)
+        worker_data["E2E"].append(avg_E2E)
+        worker_data["TTFT"].append(avg_TTFT)
+        worker_data["TPOT"].append(avg_TPOT)
+        worker_data["Target"] = self.target
 
 
+def report_metrics_to_master(environment, msg):
+    global master_data
+    master_data["#Req"]+=msg.data["#Req"]
+    master_data["E2E"]+=msg.data["E2E"]
+    master_data["TTFT"]+=msg.data["TTFT"]
+    master_data["TPOT"]+=msg.data["TPOT"]
+    master_data["Target"]=msg.data["Target"]
+    # print(f"[DEBUG] msg={msg.data}")
+    # print(f"  master_data={master_data}")
+    
+    n_user = len(master_data["#Req"])
+    if n_user == 0: # When user = 1, processes = 4, not every process handle at least 1 user.
+        return
+    n_req = sum(master_data["#Req"])
+    # print("Only show the first 8 users results:")
+    # for i in range(min(n_user,8)):
+    #     print(f"User #{i:3d}, Completed Request = {master_data['#Req'][i]}, "
+    #         f"E2E(s) = {master_data['E2E'][i]:.2f}, "
+    #         f"TTFT(s) = {master_data['TTFT'][i]:.2f}, "
+    #         f"TPOT(s) = {master_data['TPOT'][i]:.3f} ")
 
-@events.test_start.add_listener
-def on_test_start(environment, **kwargs):
-    print("[DEBUG] A new test is starting")
+    ave_E2E = sum(master_data['E2E']) / n_user
+    ave_TTFT = sum(master_data['TTFT']) / n_user
+    ave_TPOT = sum(master_data['TPOT']) / n_user
+
+    # Save result
+    # Save to a JSON file
+    if os.path.exists('benchmark.json'):
+        with open('benchmark.json', 'r') as f:
+            data = json.load(f)  # Load JSON data as a Python dictionary
+    else:
+        data = dict()
+        data["vLLM"] = dict()
+        data["Triton"] = dict()
+    server = environment.parsed_options.server
+    key = environment.parsed_options.target
+    model_name, test_case = key.split('/', 1)
+    if model_name not in data[server]:
+        data[server][model_name] = {}
+    
+    gmt_plus_8 = pytz.timezone('Etc/GMT-8')
+    current_time = datetime.now(gmt_plus_8)
+    formatted_time = current_time.strftime('%Y-%m-%d %H:%M')
+    date = "Taipei Time: " + formatted_time
+
+    data[server][model_name][test_case] = {
+        "Date": date,
+        "#Req": n_req,
+        "E2E": ave_E2E,
+        "TTFT": ave_TTFT,
+        "TPOT": ave_TPOT
+    }
+    # print(f"data = {data}")
+
+    with open('benchmark.json', 'w') as f:
+        json.dump(data, f, indent=4)  # Save with indentation for readability
+
+@events.init.add_listener
+def on_locust_init(environment, **_kwargs):
+    if isinstance(environment.runner, MasterRunner):
+        environment.runner.register_message('report_metrics_to_master', report_metrics_to_master)
+    elif isinstance(environment.runner, WorkerRunner):
+        pass
 
 @events.test_stop.add_listener
 def on_test_stop(environment, **kwargs):
     if isinstance(environment.runner, MasterRunner):
-        print("[DEBUG] I'm on master node")
+        #print("[DEBUG] I'm on master node")
+        pass
     elif isinstance(environment.runner, WorkerRunner):
-        print("[DEBUG] I'm on worker node")
-    # if not isinstance(environment.runner, MasterRunner):
-    #     print("A new test is starting")
-    #     environment.runner.register_message('test_users', setup_test_users)
-    # if not isinstance(environment.runner, WorkerRunner):
-    #     environment.runner.register_message('acknowledge_users', on_acknowledge)
-
+        # print(f"[DEBUG] I'm on worker node.")
+        environment.runner.send_message('report_metrics_to_master', worker_data)
 
 
 @events.init_command_line_parser.add_listener
@@ -188,6 +250,7 @@ def init_parser(parser):
         "--server",
         type=str,
         choices=['vLLM', 'Triton'],
+        required=True,
         help="Choices=[vLLM, Triton]. Note: Triton is Triton-Inference-Server",
     ) 
     parser.add_argument(
@@ -199,17 +262,19 @@ def init_parser(parser):
     parser.add_argument(
         "-ifile",
         type=str,
+        required=True,
         help="file of input txt",
     )
     parser.add_argument(
         "-olen",
         type=int,
+        required=True,
         help="file of input txt",
     )
     parser.add_argument(
-        "-out",
+        "-target",
         type=str,
-        help="saving result in the output folder",
+        help="saving result in the specified key 'target' in json file",
     )
     parser.add_argument(
         "-m",
