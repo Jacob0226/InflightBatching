@@ -188,7 +188,7 @@ for n_user in "${N_USER[@]}"; do
     done
 done
 
-sleep 120 # Wait other parallel models before killing the server process
+sleep 300 # Wait other parallel models before killing the server process
 ps -ef | grep '[p]ython' | awk '{print $2}' | xargs kill -9  # Kill server
 pkill tritonserver    
 
