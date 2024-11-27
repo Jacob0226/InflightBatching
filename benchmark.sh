@@ -65,14 +65,11 @@ elif [ "${server}" == "Triton" ]; then
     endpoint=/v2/models/ensemble/generate_stream
 fi
 
-
-
 # Env var:
-MODEL_FOLDER=/data/huggingface/hub/meta-llama/
-MODEL_FOLDER=/data/huggingface/hub/amd/
+MODEL_FOLDER=/data/huggingface/hub/
 DTYPE=(float16) # fp8
 DURATION=3m # 3 minutes
-N_USER=(1 8 16 24 32 40 48 56 64) # (1 32 64)  
+N_USER=(1 8 16 24 32 40 48 56 64 )   
 I_FOLDER=Datasets
 I_FILE=(2500.txt 5500.txt 11000.txt)
 
@@ -83,55 +80,50 @@ I_FILE=(2500.txt 5500.txt 11000.txt)
 
 HF_MODEL_PATH="${MODEL_FOLDER}${model_name}"
 
-if { [ "$model_name" == "Llama-3.1-8B" ] || 
-     [ "$model_name" == "Llama-3.1-8B-Instruct-FP8-KV" ]; } && 
+if { [ "$model_name" == "meta-llama/Llama-3.1-8B" ] || 
+     [ "$model_name" == "amd/Llama-3.1-8B-Instruct-FP8-KV" ]; } && 
      [ "$tp" -eq 1 ]; then
     GPU_Index="1"
     SERVER_PORT=8000
     RPC_PORT=2000
     Master_Host=127.0.0.1
     Master_Port=5557
-elif { [ "$model_name" == "Llama-3.1-8B" ] || 
-     [ "$model_name" == "Llama-3.1-8B-Instruct-FP8-KV" ]; } && 
+    max_num_batched_tokens=300000
+elif { [ "$model_name" == "meta-llama/Llama-3.1-8B" ] || 
+     [ "$model_name" == "amd/Llama-3.1-8B-Instruct-FP8-KV" ]; } && 
      [ "$tp" -eq 2 ]; then
     GPU_Index="2,3"
     SERVER_PORT=8001
     RPC_PORT=2001
     Master_Host=127.0.0.2
     Master_Port=5558 
-elif [[ "$model_name" == "Llama-3.1-70B" || "$model_name" == "Llama-3.1-70B-Instruct-FP8-KV" ]]; then
+    max_num_batched_tokens=300000
+elif [[ "$model_name" == "meta-llama/Llama-3.1-70B" || "$model_name" == "amd/Llama-3.1-70B-Instruct-FP8-KV" ]]; then
     GPU_Index="4,5,6,7"
     SERVER_PORT=8002
     RPC_PORT=2002
     Master_Host=127.0.0.3
     Master_Port=5559
+    max_num_batched_tokens=131072
 fi
-logging_file="benchmark_${model_name}_TP${tp}.log"
+
+base_model_name=$(basename "$model_name")
+logging_file="${base_model_name}_TP${tp}.log"
 rm $logging_file
 
 if [ "${server}" == "vLLM" ]; then
-    if [ "${model_name}" == "Llama-3.1-8B" ]; then
-        max_num_batched_tokens=300000
-    elif [ "${model_name}" == "Llama-3.1-70B" ]; then
-        max_num_batched_tokens=131072
-    fi
-
-    if [ "${model_name}" == "Llama-3.1-8B-Instruct-FP8-KV" ]; then
-        max_num_batched_tokens=300000
-    elif [ "${model_name}" == "Llama-3.1-70B-Instruct-FP8-KV" ]; then
-        max_num_batched_tokens=131072
-    fi
     # --enable-prefix-caching \
     # --distributed-executor-backend ray \
-    # --dtype float16 \
     # export VLLM_LOGGING_LEVEL=WARNING 
     server_cmd="
+        CUDA_VISIBLE_DEVICES=${GPU_Index} \
         HIP_VISIBLE_DEVICES=${GPU_Index} \
         vllm serve $HF_MODEL_PATH \
+            --dtype float16 \
             --swap-space 16 \
             --disable-log-requests \
             --tensor-parallel-size $tp \
-            --num-scheduler-steps 10 \
+            --num-scheduler-steps 8 \
             --enable-chunked-prefill False \
             --max-num-seqs 64  \
             --max-model-len 11500 \
@@ -169,7 +161,7 @@ for n_user in "${N_USER[@]}"; do
     for i_file in "${I_FILE[@]}"; do
         ilen="${i_file%.txt}" # 2500.txt -> 2500
         n_user_str=$(printf "%02d" "$n_user")user # "8" --> "08"
-        target=${model_name}_${DTYPE}_TP${tp}/${DURATION}/i${ilen}/${n_user_str}
+        target=${model_name}_TP${tp}/${DURATION}_i${ilen}_${n_user_str}
 
         locust_cmd="
             locust --server $server --hf-model $HF_MODEL_PATH \

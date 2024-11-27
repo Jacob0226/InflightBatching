@@ -206,7 +206,8 @@ def report_metrics_to_master(environment, msg):
         data["Triton"] = dict()
     server = environment.parsed_options.server
     key = environment.parsed_options.target
-    model_name, test_case = key.split('/', 1)
+    model_name = os.path.dirname(key)
+    test_case = os.path.basename(key)
     if model_name not in data[server]:
         data[server][model_name] = {}
     

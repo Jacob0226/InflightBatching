@@ -6,8 +6,8 @@ import pandas as pd
 import xlsxwriter
 import os
 
-def FillInExcelTemplate(row, col, model_name, worksheet):
-    worksheet.write(row, col, model_name)
+def FillInExcelTemplate(row, col, model, N_User, worksheet):
+    worksheet.write(row, col, model)
     worksheet.write(row+1, col+1, "i2500-o350")
     worksheet.write(row+1, col+5, "i5500-o350")
     worksheet.write(row+1, col+9, "i11000-o350")
@@ -22,26 +22,32 @@ def FillInExcelTemplate(row, col, model_name, worksheet):
     # Column title
     worksheet.write(row+1, col, "ilen/olen")
     worksheet.write(row+2, col, "#User")
-    worksheet.write(row+3, col, "1")
-    worksheet.write(row+4, col, "32")
-    worksheet.write(row+5, col, "64")
+    row_offset = 3
+    for n_user in N_User:
+        worksheet.write(row+row_offset, col, str(n_user))
+        row_offset+=1
 
 
 def ProcessData(args):
     workbook = xlsxwriter.Workbook(args.o)
     worksheet = workbook.add_worksheet()
 
-    Models = ["Llama-3.1-8B", "Llama-3.1-70B"]
-    TP= [4, 2]
-    Dtype = ["float16"] # ["float16", "float8"]
+    Models = [
+        "meta-llama/Llama-3.1-8B_TP1",
+        "amd/Llama-3.1-8B-Instruct-FP8-KV_TP1",
+        "meta-llama/Llama-3.1-8B_TP2",
+        "amd/Llama-3.1-8B-Instruct-FP8-KV_TP2",
+        "meta-llama/Llama-3.1-70B_TP4",
+        "amd/Llama-3.1-70B-Instruct-FP8-KV_TP4"
+    ]
 
-    Dur="2m"
-    I_Len=["i2500", "i5500", "i11000"]
-    N_User=[1, 32, 64]
+    Dur = "3m"
+    I_Len = ["i2500", "i5500", "i11000"]
+    N_User = [1, 8, 16, 24, 32, 40, 48, 56, 64]
 
     # Excel (x,y) position
     row, col = 0, 0
-    row_offset_nuser={1:3, 32:4, 64:5}
+    row_offset_nuser = {n_user: offset + 3 for offset, n_user in enumerate(N_User)}
     col_offset_ilen={"i2500":1, "i5500":5, "i11000":9}
 
     with open(args.i, 'r') as f:
@@ -51,35 +57,34 @@ def ProcessData(args):
     elif data['Triton'] == {}: # Empty dictionary
         data = data["vLLM"]
     
-    for tp in TP:
-        for model in Models:
-            for dtype in Dtype:
-                model_name = '_'.join([model, dtype, 'TP'+str(tp)])
-                print(model_name)
-                if model_name not in data:
-                    print(f"model {model_name} not in json. Skip...")
+    for model in Models:
+        if model not in data:
+            print(f"model {model} not in json. Skip...")
+            continue
+        # Fill in the excel table 
+        FillInExcelTemplate(row, col, model, N_User, worksheet)
+
+        for ilen in I_Len:
+            for n_user in N_User:
+                n_user_str = "{:02}".format(n_user) + "user"
+                dur_ilen_user = '_'.join([Dur, ilen, n_user_str])
+                if dur_ilen_user not in data[model]:
+                    print(f"{dur_ilen_user} not in {model}. Skip...")
+                    r_offset = row_offset_nuser[n_user]
+                    c_offset = col_offset_ilen[ilen]
+                    worksheet.write(row+r_offset, col+c_offset+0, "-")
+                    worksheet.write(row+r_offset, col+c_offset+1, "-")
+                    worksheet.write(row+r_offset, col+c_offset+2, "-")
+                    worksheet.write(row+r_offset, col+c_offset+3, "-")
                     continue
-                # Fill in the excel table 
-                FillInExcelTemplate(row, col, model_name, worksheet)
-
-                for ilen in I_Len:
-                    for n_user in N_User:
-                        n_user_str = "{:02}".format(n_user) + "user"
-                        dur_ilen_user = '/'.join(['2m', ilen, n_user_str])
-
-                        # print(f"dur_ilen_user={dur_ilen_user}")
-                        # print(f"model_name={model_name}")
-                        # print(f"data[model_name][dur_ilen_user]={data[model_name][dur_ilen_user]}")
-                        # exit(0)
-
-                        
-                        r_offset = row_offset_nuser[n_user]
-                        c_offset = col_offset_ilen[ilen]
-                        worksheet.write(row+r_offset, col+c_offset+0, data[model_name][dur_ilen_user]["#Req"])
-                        worksheet.write(row+r_offset, col+c_offset+1, data[model_name][dur_ilen_user]["E2E"])
-                        worksheet.write(row+r_offset, col+c_offset+2, data[model_name][dur_ilen_user]["TTFT"])
-                        worksheet.write(row+r_offset, col+c_offset+3, data[model_name][dur_ilen_user]["TPOT"])       
-                row+=8              
+   
+                r_offset = row_offset_nuser[n_user]
+                c_offset = col_offset_ilen[ilen]
+                worksheet.write(row+r_offset, col+c_offset+0, data[model][dur_ilen_user]["#Req"])
+                worksheet.write(row+r_offset, col+c_offset+1, data[model][dur_ilen_user]["E2E"])
+                worksheet.write(row+r_offset, col+c_offset+2, data[model][dur_ilen_user]["TTFT"])
+                worksheet.write(row+r_offset, col+c_offset+3, data[model][dur_ilen_user]["TPOT"])       
+        row+=16              
 
     workbook.close()
     exit()
