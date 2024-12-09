@@ -30,12 +30,12 @@ class LLMUser(HttpUser):
         self.input_datafile = self.environment.parsed_options.ifile      
         with open(self.input_datafile, 'r') as file:
             self.prompt = file.read() 
-        self.words = self.prompt.split()
-        self.prompts = []
-        for i in range(100): # Generate random prompt
-            random.shuffle(self.words)
-            self.prompts.append(' '.join(self.words))
-        self.prompt_idx = 0
+        # self.words = self.prompt.split()
+        # self.prompts = []
+        # for i in range(100): # Generate random prompt
+        #     random.shuffle(self.words)
+        #     self.prompts.append(' '.join(self.words))
+        # self.prompt_idx = 0
 
                
         server_common_config = {
@@ -208,6 +208,8 @@ def report_metrics_to_master(environment, msg):
     key = environment.parsed_options.target
     model_name = os.path.dirname(key)
     test_case = os.path.basename(key)
+    if server not in data:
+        data[server] = {}
     if model_name not in data[server]:
         data[server][model_name] = {}
     

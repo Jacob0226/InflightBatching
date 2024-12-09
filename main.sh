@@ -33,15 +33,6 @@ while [[ "$#" -gt 0 ]]; do
                 exit 1
             fi
             ;;
-        --fp16)
-            Benchmark_Target=("meta-llama/Llama-3.1-8B 1" "meta-llama/Llama-3.1-8B 2" "meta-llama/Llama-3.1-70B 4")
-            shift
-            ;;
-        --fp8)
-            Benchmark_Target=("amd/Llama-3.1-8B-Instruct-FP8-KV 1" "amd/Llama-3.1-8B-Instruct-FP8-KV 2" 
-                  "amd/Llama-3.1-70B-Instruct-FP8-KV 4")
-            shift
-            ;;
         *)
             echo "Unknown option: $1"
             show_help
@@ -50,9 +41,11 @@ while [[ "$#" -gt 0 ]]; do
     esac
 done
 
+Benchmark_Target=("meta-llama/Llama-3.1-8B 1" "meta-llama/Llama-3.1-8B 2" "amd/Llama-3.1-70B-Instruct-FP8-KV 4")
+
 # Validate required arguments
-if [[ -z "$server" || -z "$Benchmark_Target" ]]; then
-    echo "Error: Both --server and --fp16|--fp8 are required."
+if [[ -z "$server" ]]; then
+    echo "Error:  --server is required."
     show_help
 fi
 
@@ -66,7 +59,7 @@ fi
 for target in "${Benchmark_Target[@]}"; do
     read model_name tp <<< "$target"
     bench_cmd="./benchmark.sh --server ${server} --model ${model_name} --tp ${tp} &"
-    echo "bench_cmd=${bench_cmd}"
+    echo $bench_cmd
     eval "${bench_cmd}"
 done
 

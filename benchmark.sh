@@ -75,30 +75,25 @@ I_FILE=(2500.txt 5500.txt 11000.txt)
 
 # # Debug usage. Less cases
 # DURATION=30s
-# N_USER=(1)
-# I_FILE=(2500.txt)
+# N_USER=(64)
 
 HF_MODEL_PATH="${MODEL_FOLDER}${model_name}"
 
-if { [ "$model_name" == "meta-llama/Llama-3.1-8B" ] || 
-     [ "$model_name" == "amd/Llama-3.1-8B-Instruct-FP8-KV" ]; } && 
-     [ "$tp" -eq 1 ]; then
+if { [ "$model_name" == "meta-llama/Llama-3.1-8B" ] && [ "$tp" -eq 1 ]; }; then
     GPU_Index="1"
     SERVER_PORT=8000
     RPC_PORT=2000
     Master_Host=127.0.0.1
     Master_Port=5557
     max_num_batched_tokens=300000
-elif { [ "$model_name" == "meta-llama/Llama-3.1-8B" ] || 
-     [ "$model_name" == "amd/Llama-3.1-8B-Instruct-FP8-KV" ]; } && 
-     [ "$tp" -eq 2 ]; then
+elif { [ "$model_name" == "meta-llama/Llama-3.1-8B" ] && [ "$tp" -eq 2 ]; }; then
     GPU_Index="2,3"
     SERVER_PORT=8001
     RPC_PORT=2001
     Master_Host=127.0.0.2
     Master_Port=5558 
     max_num_batched_tokens=300000
-elif [[ "$model_name" == "meta-llama/Llama-3.1-70B" || "$model_name" == "amd/Llama-3.1-70B-Instruct-FP8-KV" ]]; then
+elif [[ "$model_name" == "amd/Llama-3.1-70B-Instruct-FP8-KV" ]]; then
     GPU_Index="4,5,6,7"
     SERVER_PORT=8002
     RPC_PORT=2002
@@ -106,6 +101,7 @@ elif [[ "$model_name" == "meta-llama/Llama-3.1-70B" || "$model_name" == "amd/Lla
     Master_Port=5559
     max_num_batched_tokens=131072
 fi
+
 
 base_model_name=$(basename "$model_name")
 logging_file="${base_model_name}_TP${tp}.log"
@@ -119,7 +115,6 @@ if [ "${server}" == "vLLM" ]; then
         CUDA_VISIBLE_DEVICES=${GPU_Index} \
         HIP_VISIBLE_DEVICES=${GPU_Index} \
         vllm serve $HF_MODEL_PATH \
-            --dtype float16 \
             --swap-space 16 \
             --disable-log-requests \
             --tensor-parallel-size $tp \
