@@ -10,9 +10,13 @@ from transformers import AutoTokenizer
 import random
 from datetime import datetime
 import pytz
+import logging
+import requests
 
 worker_data = {"#Req": [], "E2E": [], "TTFT": [], "TPOT": [], "Target":None}
 master_data = {"#Req": [], "E2E": [], "TTFT": [], "TPOT": [], "Target":None}
+logging.basicConfig(level=logging.INFO) 
+logger = logging.getLogger(__name__) 
 
 class LLMUser(HttpUser):
     # RPS / QPS
@@ -30,12 +34,12 @@ class LLMUser(HttpUser):
         self.input_datafile = self.environment.parsed_options.ifile      
         with open(self.input_datafile, 'r') as file:
             self.prompt = file.read() 
-        # self.words = self.prompt.split()
-        # self.prompts = []
-        # for i in range(100): # Generate random prompt
-        #     random.shuffle(self.words)
-        #     self.prompts.append(' '.join(self.words))
-        # self.prompt_idx = 0
+        self.words = self.prompt.split()
+        self.prompts = []
+        for i in range(100): # Generate random prompt
+            random.shuffle(self.words)
+            self.prompts.append(' '.join(self.words))
+        self.prompt_idx = 0
 
                
         server_common_config = {
@@ -59,7 +63,8 @@ class LLMUser(HttpUser):
         elif self.server == "Triton":
             self.data = server_common_config | triton_config
 
-        self.tokenizer = AutoTokenizer.from_pretrained(self.environment.parsed_options.hf_model)
+        if self.environment.parsed_options.hf_model is not None:
+            self.tokenizer = AutoTokenizer.from_pretrained(self.environment.parsed_options.hf_model)
 
         # Result:
         self.E2E = []
@@ -197,8 +202,8 @@ def report_metrics_to_master(environment, msg):
 
     # Save result
     # Save to a JSON file
-    if os.path.exists('benchmark.json'):
-        with open('benchmark.json', 'r') as f:
+    if os.path.exists(environment.parsed_options.outJson):
+        with open(environment.parsed_options.outJson, 'r') as f:
             data = json.load(f)  # Load JSON data as a Python dictionary
     else:
         data = dict()
@@ -227,13 +232,20 @@ def report_metrics_to_master(environment, msg):
     }
     # print(f"data = {data}")
 
-    with open('benchmark.json', 'w') as f:
+    with open(environment.parsed_options.outJson, 'w') as f:
         json.dump(data, f, indent=4)  # Save with indentation for readability
 
 @events.init.add_listener
 def on_locust_init(environment, **_kwargs):
     if isinstance(environment.runner, MasterRunner):
         environment.runner.register_message('report_metrics_to_master', report_metrics_to_master)
+        if environment.parsed_options.rpd_profile:
+            logger.info(f"host = {environment.parsed_options.host} ")
+            response = requests.post(environment.parsed_options.host+"/start_profile")
+            if response.status_code == 200:
+                logger.info(f"Start rpd profiling ")
+            else:
+                logger.info(f"Fail to start rpd profiling ")
     elif isinstance(environment.runner, WorkerRunner):
         pass
 
@@ -241,7 +253,12 @@ def on_locust_init(environment, **_kwargs):
 def on_test_stop(environment, **kwargs):
     if isinstance(environment.runner, MasterRunner):
         #print("[DEBUG] I'm on master node")
-        pass
+        if environment.parsed_options.rpd_profile:
+            response = requests.post(environment.parsed_options.host+"/stop_profile")
+            if response.status_code == 200:
+                logger.info(f"Stop rpd profiling ")
+            else:
+                logger.info(f"Fail to end rpd profiling ")
     elif isinstance(environment.runner, WorkerRunner):
         # print(f"[DEBUG] I'm on worker node.")
         environment.runner.send_message('report_metrics_to_master', worker_data)
@@ -275,9 +292,15 @@ def init_parser(parser):
         help="file of input txt",
     )
     parser.add_argument(
+        "-outJson",
+        type=str,
+        default="benchmark.json",
+        help="file of output json to store metrics",
+    )
+    parser.add_argument(
         "-target",
         type=str,
-        help="saving result in the specified key 'target' in json file",
+        help="saving result in the specified key 'target' in outJson file",
     )
     parser.add_argument(
         "-m",
@@ -287,6 +310,7 @@ def init_parser(parser):
         help=("Path to HF model folder. If not specified we will use env var MODEL_PATH.\n"
               "Required by vLLM server. Also, we use tokenizer to debug the token lengths.")
     )
+    parser.add_argument("--rpd-profile", action="store_true", help="Activate profiling for ROCm/vLLM")
 
 '''
 vLLM:

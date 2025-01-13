@@ -1,52 +1,55 @@
 #!/bin/bash
+set -x
 
-
-MODEL_NAME=(Llama-3.1-8B Llama-3.1-70B)
-MODEL_PATH=/data/huggingface/hub/meta-llama
+# TensorRT-LLM/examples/quantization/quantize.py quantize 70B-bf16 into fp8 and it's already TRT-LLM ckpt 
+MODEL_NAME=(
+    "meta-llama/Llama-3.1-8B 1 bfloat16" 
+    "meta-llama/Llama-3.1-8B 2 bfloat16" 
+    "meta-llama/Llama-3.1-70B 4 fp8"
+    "meta-llama/Llama-3.1-70B 8 fp8"
+    )
+MODEL_PATH=/data/huggingface/hub/
 CONVERT_SCRIPT=/home/jacchang/tensorrtllm_backend/tensorrt_llm/examples/llama/convert_checkpoint.py
-DTYPE=float16 #(float16 float8)
-N_GPU=(2 4)
+QUANT_SCRIPT=/home/jacchang/tensorrtllm_backend/tensorrt_llm/examples/quantization/quantize.py
 
 # Generate TRT-LLM ckpt 
-for model_name in "${MODEL_NAME[@]}"; do
-    for n_gpu in "${N_GPU[@]}"; do
+for target in "${MODEL_NAME[@]}"; do
+    read model_name tp dtype <<< "$target"
 
-        cmd="
-            python3 $CONVERT_SCRIPT \
-                --model_dir ${MODEL_PATH}/${model_name} \
-                --output_dir ${MODEL_PATH}/tllm_checkpoint/${model_name}_${DTYPE}_${n_gpu}GPU \
-                --dtype ${DTYPE} \
-                --tp_size ${n_gpu}
-        "
+    # Check for dtype being 'fp8' or not
+    if [[ "$dtype" != "fp8" ]]; then
+        python3 $CONVERT_SCRIPT \
+            --model_dir ${MODEL_PATH}/${model_name} \
+            --output_dir ${MODEL_PATH}/tllm_checkpoint/${model_name}_${dtype}_${tp}GPU \
+            --dtype ${dtype} \
+            --tp_size ${tp}
+    else
+        python3 $QUANT_SCRIPT \
+            --model_dir ${MODEL_PATH}/${model_name} \
+            --qformat fp8 --kv_cache_dtype fp8 --tp_size ${tp} \
+            --output_dir ${MODEL_PATH}/tllm_checkpoint/${model_name}_${dtype}_${tp}GPU
+    fi
 
-        echo $cmd
-        eval $cmd
-        echo "------------------------------------------------------------"
-    done
+    echo "Model checkpoint for ${model_name} with dtype ${dtype} and TP size ${tp} GPU(s) generated."
+
 done
 
 # Build TRT-LLM engine
-for model_name in "${MODEL_NAME[@]}"; do
-    for n_gpu in "${N_GPU[@]}"; do
+for target in "${MODEL_NAME[@]}"; do
+    read model_name tp dtype <<< "$target"
 
-        cmd="
-            CUDA_VISIBLE_DEVICES=4,5,6,7 \
-            trtllm-build \
-                --checkpoint_dir ${MODEL_PATH}/tllm_checkpoint/${model_name}_${DTYPE}_${n_gpu}GPU \
-                --output_dir $MODEL_PATH/trt_engines/${model_name}_${DTYPE}_${n_gpu}GPU \
-                --gemm_plugin float16 \
-                --max_batch_size 64  \
-                --max_input_len  11000 \
-                --max_seq_len    11500 \
-                --max_num_tokens 704000 \
-                --workers ${n_gpu}
-        "
+    # vLLM: --max-model-len 16384 --max-num-batched-tokens 131072 --max-seq-len-to-capture 16384										
+    trtllm-build \
+        --checkpoint_dir ${MODEL_PATH}/tllm_checkpoint/${model_name}_${dtype}_${tp}GPU \
+        --output_dir $MODEL_PATH/trt_engines/${model_name}_${dtype}_${tp}GPU \
+        --gemm_plugin ${dtype} \
+        --max_batch_size 64  \
+        --max_input_len  15384 \
+        --max_seq_len    16384 \
+        --max_num_tokens 131072 \
+        --workers ${tp}
 
-        echo $cmd
-        eval $cmd
-        echo "------------------------------------------------------------"
-
-    done
+    echo "------------------------------------------------------------"
 done    
 
 

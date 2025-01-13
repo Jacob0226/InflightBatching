@@ -426,7 +426,7 @@ parameters: {
 parameters: {
   key: "gpt_model_path"
   value: {
-    string_value: "/data/huggingface/hub/meta-llama/trt_engines/Llama-3.1-70B_float16_2GPU/"
+    string_value: "/data/huggingface/hub/trt_engines/meta-llama/Llama-3.1-70B_fp8_4GPU"
   }
 }
 parameters: {
