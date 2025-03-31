@@ -69,6 +69,7 @@ MODEL_FOLDER="${MODEL_FOLDER:-/data/huggingface/hub}"
 MODEL_PATH="${MODEL_FOLDER}/${MODEL_NAME}"
 QUANT=None # --quantization is ONLINE quantization. Cannot use in ServiceNow
 
+
 if [[ "$MODEL_NAME" == "meta-llama/Llama-3.1-8B" ]]; then
     DTYPE=bfloat16
     KV_TYPE=auto
@@ -84,6 +85,8 @@ fi
 
 for i in $(seq 1 $num_instances); do
     SERVER_PORT+=("$(printf '800%1d' $i)")
+    Locust_Master_Host+=("127.0.1.$i")  # Add IP addresses 127.0.1.1, 127.0.1.2, ...
+    Locust_Master_Port+=("$(printf '500%1d' $i)") 
 done
 
 if [ "$num_instances" -eq 8 ]; then
@@ -100,65 +103,134 @@ else
 fi
 
 
+# Locust settings
+DURATION=3m # 3 minutes
+I_FOLDER=$USER/POC_RFP/vllm/Llama3.1/Datasets
+N_USER=(1 8 16 24 32 40 48 56 64 96 128 196)
+I_FILE=(2000.txt 4400.txt 8600.txt)
+O_LEN=(150 170 180)
+Locust_File=$USER/POC_RFP/vllm/Llama3.1/locustfile.py
+model_name="${MODEL_PATH%/*}"  # Remove last component (/data/huggingface/hub/meta-llama/Llama-3.1-8B  --> Llama-3.1-8B)
+model_name="${model_name##*/}/$(basename "$MODEL_PATH")"  # Extract last two components
+
+# Debug usage. Less cases
+# DURATION=10s
+# N_USER=(1 8)
+# O_LEN=(150)
+# I_FILE=(2000.txt)
+
+# Output 
+# meta-llama/Llama-3.1-8B -> meta-llama_Llama-3.1-8B
+result_folder="0331_${MODEL_NAME//\//_}_${num_instances}xTP${TP}"
+log_folder="${result_folder}/log"
+benchmark_folder="${result_folder}/LocustMetric"
+openai_metric_folder="${result_folder}/OpenAI_Metric"
+mkdir -p $log_folder $benchmark_folder $openai_metric_folder
+
 
 # Start the servers
-for i in $(seq 0 $(($num_instances - 1))); do
-    server_port=${SERVER_PORT[$i]}
-    gpu_index=${GPU_Index[$i]}
-    
-    # Command to launch the server
-    CUDA_VISIBLE_DEVICES=${gpu_index} \
-    HIP_VISIBLE_DEVICES=${gpu_index} \
-    vllm serve $MODEL_PATH \
-        --dtype ${DTYPE} \
-        --kv-cache-dtype ${KV_TYPE} \
-        --quantization $QUANT \
-        --swap-space 16 \
-        --disable-log-requests \
-        --distributed-executor-backend mp \
-        --tensor-parallel-size $TP \
-        --num-scheduler-steps 16 \
-        --enable-chunked-prefill False \
-        --max-num-seqs 64 \
-        --max-model-len 16384 \
-        --max-seq-len-to-capture 16384 \
-        --max-num-batched-tokens 131072 \
-        --uvicorn-log-level warning \
-        --port $server_port &
-done
+for n_user in "${N_USER[@]}"; do
+    for idx_file in "${!I_FILE[@]}"; do
+        i_file="${I_FILE[$idx_file]}"
+        o_len="${O_LEN[$idx_file]}"
+        ilen="${i_file%.txt}" # 2500.txt -> 2500
+        n_user_str=$(printf "%02d" "$n_user")user # "8" --> "08"
 
-# Check if the servers are ready
-for i in $(seq 0 $(($num_instances - 1))); do
-    server_port=${SERVER_PORT[$i]}
-    echo "Waiting for the server to be ready on port ${server_port}..."
-    server_url="http://localhost:${server_port}"  # Replace with your server's URL and port
-    server_launch_time=0
-    # Loop to check server readiness
-    while ! curl -s "$server_url" > /dev/null; do
-        sleep 5  # Wait 5 seconds before checking again
-        server_launch_time=$((server_launch_time + 5))
-        echo "Server launch time(s): ${server_launch_time}"
+        # Start servers in parallel
+        for idx_server in $(seq 0 $(($num_instances - 1))); do
+            server_port=${SERVER_PORT[$idx_server]}
+            gpu_index=${GPU_Index[$idx_server]}
+            
+            # Command to launch the server
+            CUDA_VISIBLE_DEVICES=${gpu_index} \
+            HIP_VISIBLE_DEVICES=${gpu_index} \
+            vllm serve $MODEL_PATH \
+                --dtype ${DTYPE} \
+                --kv-cache-dtype ${KV_TYPE} \
+                --quantization $QUANT \
+                --swap-space 16 \
+                --disable-log-requests \
+                --distributed-executor-backend mp \
+                --tensor-parallel-size $TP \
+                --enable-chunked-prefill False \
+                --max-num-seqs 64 \
+                --max-model-len 16384 \
+                --max-seq-len-to-capture 16384 \
+                --max-num-batched-tokens 131072 \
+                --uvicorn-log-level warning \
+                --port $server_port &
+
+            # Save the server PID (to kill later if needed)
+            server_pids+=($!) 
+        done
+
+        # Check if the servers are ready
+        for i in $(seq 0 $(($num_instances - 1))); do
+            server_port=${SERVER_PORT[$i]}
+            echo "Waiting for the server to be ready on port ${server_port}..."
+            server_url="http://localhost:${server_port}"  # Replace with your server's URL and port
+            server_launch_time=0
+            # Loop to check server readiness
+            while ! curl -s "$server_url" > /dev/null; do
+                sleep 5  # Wait 5 seconds before checking again
+                server_launch_time=$((server_launch_time + 5))
+                echo "Server launch time(s): ${server_launch_time}"
+            done
+            echo "Server on port ${server_port} is ready!"
+        done
+
+        echo "All ${num_instances} ${MODEL_NAME}_TP${TP} servers are up and running."
+
+        # Run locust in parallel for all servers
+        declare -A locust_pids  # Associative array to map idx_server to PID
+
+        for idx_server in $(seq 0 $(($num_instances - 1))); do
+            server_port=${SERVER_PORT[$idx_server]}
+            Master_Host=${Locust_Master_Host[$idx_server]}
+            Master_Port=${Locust_Master_Port[$idx_server]}
+
+            logging_file="${log_folder}/locust_server${idx_server}.log"
+            target=${result_folder}/${DURATION}_i${ilen}_${n_user_str}
+            
+            # Start locust in the background and save the PID
+            locust --server vLLM --hf-model $MODEL_PATH \
+                -f $Locust_File --host http://localhost:${server_port} --endpoint /v1/completions \
+                -t $DURATION -u $n_user -r $n_user --processes 16 \
+                -ifile $I_FOLDER/$i_file -olen $o_len \
+                -outJson ${benchmark_folder}/server${idx_server}.json -target $target \
+                --master-host $Master_Host --master-port $Master_Port --master-bind-port $Master_Port \
+                --headless --only-summary 2>&1 | tee ${logging_file} &
+
+            # Map idx_server to the PID of the locust process
+            locust_pids["$idx_server"]=$! 
+        done
+
+        # Wait for all locust processes to finish
+        for idx in "${!locust_pids[@]}"; do
+            pid="${locust_pids[$idx]}"
+            server_port="${SERVER_PORT[$idx]}"
+            idx_server=$idx
+
+            wait "$pid"
+            echo "Locust process for server index $idx_server (PID: $pid) finishes..."
+            curl "http://localhost:${server_port}/metrics" > \
+                "$openai_metric_folder/${DURATION}_i${ilen}_${n_user_str}_server${idx_server}.log"
+        done
+
+        echo "All locust tasks are complete."
+
+        # Kill all vllm server processes
+        ps -ef | grep '[p]ython' | awk '{print $2}' | xargs kill -9  # Kill server
+        # for pid in "${server_pids[@]}"; do # Not work. Server still alive
+        #     kill -9 $pid
+        # done
+
+        echo "All servers have been killed."
+        
+        sleep 10 # Wait a bit before moving on
     done
-    echo "Server on port ${server_port} is ready!"
 done
 
-echo "All ${num_instances} ${MODEL_NAME}_TP${TP} servers are up and running."
-
-# meta-llama/Llama-3.1-8B -> meta-llama_Llama-3.1-8B
-result_folder="$(echo "$MODEL_NAME" | sed 's/\//_/g')_${num_instances}xTP${TP}" 
-mkdir -p $result_folder
-
-# Run the client scripts in parallel for all 4 servers
-for i in $(seq 0 $(($num_instances - 1))); do
-    server_port=${SERVER_PORT[$i]}
-    log_folder="${result_folder}/log"
-    mkdir -p $log_folder
-    logging_file="${log_folder}/client${i}.log"
-    ./client.sh --server-idx $i --server-port $server_port --hf-model $MODEL_PATH --result-folder $result_folder \
-         2>&1 | tee ${logging_file} &
-done
-
-wait
 
 # Sample cmd:
 #   ./server.sh --model-name meta-llama/Llama-3.1-8B --tp 1 --instance 8
