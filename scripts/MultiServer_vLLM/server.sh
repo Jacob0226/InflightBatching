@@ -69,7 +69,6 @@ MODEL_FOLDER="${MODEL_FOLDER:-/data/huggingface/hub}"
 MODEL_PATH="${MODEL_FOLDER}/${MODEL_NAME}"
 QUANT=None # --quantization is ONLINE quantization. Cannot use in ServiceNow
 
-
 if [[ "$MODEL_NAME" == "meta-llama/Llama-3.1-8B" ]]; then
     DTYPE=bfloat16
     KV_TYPE=auto
@@ -108,7 +107,7 @@ DURATION=3m # 3 minutes
 I_FOLDER=$USER/POC_RFP/vllm/Llama3.1/Datasets
 N_USER=(1 8 16 24 32 40 48 56 64 96 128 196)
 I_FILE=(2000.txt 4400.txt 8600.txt)
-O_LEN=(150 170 180)
+O_LEN=(150 150 150)
 Locust_File=$USER/POC_RFP/vllm/Llama3.1/locustfile.py
 model_name="${MODEL_PATH%/*}"  # Remove last component (/data/huggingface/hub/meta-llama/Llama-3.1-8B  --> Llama-3.1-8B)
 model_name="${model_name##*/}/$(basename "$MODEL_PATH")"  # Extract last two components

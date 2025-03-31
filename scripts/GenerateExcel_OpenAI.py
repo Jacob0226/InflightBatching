@@ -73,9 +73,9 @@ def process_log_files(log_folder, n_server):
                 grouped_metrics["prompt_tokens_total"] = sum(grouped_metrics["prompt_tokens_total"])
                 grouped_metrics["generation_tokens_total"] = sum(grouped_metrics["generation_tokens_total"])
                 grouped_metrics["iteration_tokens_total_sum"] = sum(grouped_metrics["iteration_tokens_total_sum"])
-                grouped_metrics["request_inference_time_seconds_sum"] = sum(grouped_metrics["request_inference_time_seconds_sum"]) / n_server
-                grouped_metrics["e2e_request_latency_seconds_sum"] = sum(grouped_metrics["e2e_request_latency_seconds_sum"]) / n_server 
-                grouped_metrics["time_to_first_token_seconds_sum"] = sum(grouped_metrics["time_to_first_token_seconds_sum"]) / n_server
+                grouped_metrics["request_inference_time_seconds_sum"] = sum(grouped_metrics["request_inference_time_seconds_sum"]) / grouped_metrics["request_success_total"]
+                grouped_metrics["e2e_request_latency_seconds_sum"] = sum(grouped_metrics["e2e_request_latency_seconds_sum"]) / grouped_metrics["request_success_total"]
+                grouped_metrics["time_to_first_token_seconds_sum"] = sum(grouped_metrics["time_to_first_token_seconds_sum"]) / grouped_metrics["request_success_total"]
 
                 final_metrics[model_name].append({f"{TIME}_{io_len}_{n_user:02d}user": grouped_metrics})
     return final_metrics
@@ -98,7 +98,7 @@ def main():
 
     openai_metric_folder = os.path.join(input_folder, "OpenAI_Metric")
     os.makedirs(openai_metric_folder, exist_ok=True)
-    output_filepath = os.path.join(input_folder, "OpanAI_Metric.json")
+    output_filepath = os.path.join(input_folder, "OpenAI_Metric.json")
 
     num_servers=1
     match = re.search(r'(\d+)xTP', input_folder)
@@ -114,7 +114,7 @@ def main():
 
     with open(output_filepath, 'w') as outfile:
         json.dump(output_json, outfile, indent=4)
-        print(output_json)
+        # print(output_json)
 
     print(f"Aggregated {inference_type} metrics saved to: {output_filepath}")
 
@@ -124,5 +124,8 @@ if __name__ == "__main__":
 '''
 
 python GenerateExcel_OpenAI.py --folder MultiServer_vLLM/meta-llama_Llama-3.1-8B_4xTP1
+python GenerateExcel_OpenAI.py --folder MultiServer_vLLM/0331_meta-llama_Llama-3.1-8B_4xTP1
+
+
 
 '''
