@@ -63,8 +63,8 @@ class LLMUser(HttpUser):
         elif self.server == "Triton":
             self.data = server_common_config | triton_config
 
-        if self.environment.parsed_options.hf_model is not None:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.environment.parsed_options.hf_model)
+        # if self.environment.parsed_options.hf_model is not None:
+        #     self.tokenizer = AutoTokenizer.from_pretrained(self.environment.parsed_options.hf_model)
 
         # Result:
         self.E2E = []
@@ -96,10 +96,12 @@ class LLMUser(HttpUser):
         # self.prompt_idx=(1+self.prompt_idx)%100
         
         t_start = time.perf_counter()
+        headers = {"Content-Type": "application/json"}
         with self.client.post(
             self.endpoint,
             data=json.dumps(self.data),
-            stream=True,
+            headers=headers,
+            stream=False,
             catch_response=True,
         ) as response:
 
@@ -234,6 +236,8 @@ def report_metrics_to_master(environment, msg):
 
     with open(environment.parsed_options.outJson, 'w') as f:
         json.dump(data, f, indent=4)  # Save with indentation for readability
+        # print(f"[DEBUG] json data=", data)
+        # print(f"[DEBUG] outJson={outJson}")
 
 @events.init.add_listener
 def on_locust_init(environment, **_kwargs):
