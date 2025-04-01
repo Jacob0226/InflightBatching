@@ -120,7 +120,7 @@ model_name="${model_name##*/}/$(basename "$MODEL_PATH")"  # Extract last two com
 
 # Output 
 # meta-llama/Llama-3.1-8B -> meta-llama_Llama-3.1-8B
-result_folder="0331_${MODEL_NAME//\//_}_${num_instances}xTP${TP}"
+result_folder="NoPrefix_${MODEL_NAME//\//_}_${num_instances}xTP${TP}"
 log_folder="${result_folder}/log"
 benchmark_folder="${result_folder}/LocustMetric"
 openai_metric_folder="${result_folder}/OpenAI_Metric"
@@ -141,6 +141,7 @@ for n_user in "${N_USER[@]}"; do
             gpu_index=${GPU_Index[$idx_server]}
             
             # Command to launch the server
+            # vllm V1 enables prefix caching by default. So explicitly diable it via --no-enable-prefix-caching
             CUDA_VISIBLE_DEVICES=${gpu_index} \
             HIP_VISIBLE_DEVICES=${gpu_index} \
             vllm serve $MODEL_PATH \
@@ -156,6 +157,7 @@ for n_user in "${N_USER[@]}"; do
                 --max-model-len 16384 \
                 --max-seq-len-to-capture 16384 \
                 --max-num-batched-tokens 131072 \
+		        --no-enable-prefix-caching \
                 --uvicorn-log-level warning \
                 --port $server_port &
 
