@@ -1,0 +1,2 @@
+MI300X Docker: docker.io/rocm/vllm-dev:nightly_main_20250420
+The script serving_chat.py works with this docker.
