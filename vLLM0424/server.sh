@@ -86,10 +86,11 @@ fi
 DURATION=3m # 3 minutes
 I_FOLDER=$USER/POC_RFP/vllm/Llama3.1/Datasets
 # For the 70B model, H100 runs with TP=4, so MI300X processes the batch size at one-fourth that of the H100.
-# H100 Users=(1 8 16 24 32 40 48 56 64 96 128 196) 
+# H100 Users=(1 8 16 24 32 40 48 56 64) 
 N_USER=(1 2 4 6 8 10 12 14 16) 
-I_FILE=(2000.txt 4400.txt 8600.txt)
-O_LEN=(150 150 150)
+N_USER=(8 10 12 14 16) 
+I_FILE=(2000.txt 4000.txt 8500.txt)
+O_LEN=(200 200 200)
 Locust_File=$USER/POC_RFP/vllm/Llama3.1/scripts/vLLM_OpenaiMetric/locustfile.py
 
 # Debug usage. Less cases
@@ -100,10 +101,11 @@ Locust_File=$USER/POC_RFP/vllm/Llama3.1/scripts/vLLM_OpenaiMetric/locustfile.py
 
 # Output 
 # meta-llama/Llama-3.1-8B -> meta-llama_Llama-3.1-8B
+out_root_folder="Result/0512/Test"
 if [[ "$V1_FLAG" == "True" ]]; then
-  result_folder="Result_New/$(basename "$MODEL_NAME")_V1"
+  result_folder="$out_root_folder/$(basename "$MODEL_NAME")_V1"
 else
-  result_folder="Result_New/$(basename "$MODEL_NAME")_V0"
+  result_folder="$out_root_folder/$(basename "$MODEL_NAME")_V0"
 fi
 mkdir -p $result_folder
 
@@ -113,10 +115,10 @@ Locust_Master_Port=5002
 
 # Command to launch the server
 vllm serve $MODEL_PATH \
+    --chat-template /app/vllm/examples/tool_chat_template_llama3.1_json.jinja \
     --dtype ${DTYPE} \
     --tensor-parallel-size $TP \
     --kv-cache-dtype ${KV_TYPE} \
-    --quantization $QUANT \
     --swap-space 16 \
     --distributed-executor-backend mp \
     --max-num-seqs 64 \
@@ -124,11 +126,12 @@ vllm serve $MODEL_PATH \
     --max-seq-len-to-capture 16384 \
     --max-num-batched-tokens $BT \
     --no-enable-prefix-caching \
-    --enable-chunked-prefill=False \
+    --no-enable-chunked-prefill \
     --disable-log-requests \
     --uvicorn-log-level warning \
     --port $SERVER_PORT \
     $(if [ "$SCHE" -ne 0 ]; then echo "--num-scheduler-steps $SCHE"; fi) &
+    # --quantization $QUANT  # error: argument --quantization/-q: invalid choice: 'None'
 
 # Check if the servers are ready
 echo "Waiting for the server to be ready on port ${SERVER_PORT}..."
@@ -143,8 +146,8 @@ done
 echo "Server on port ${SERVER_PORT} is ready!"
 
 # Start the servers
-for n_user in "${N_USER[@]}"; do
-    for idx_file in "${!I_FILE[@]}"; do
+for n_user in "${N_USER[@]}"; do # 1
+    for idx_file in "${!I_FILE[@]}"; do # i2000.txt
         i_file="${I_FILE[$idx_file]}"
         o_len="${O_LEN[$idx_file]}"
         ilen="${i_file%.txt}" # 2500.txt -> 2500

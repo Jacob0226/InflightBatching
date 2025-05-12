@@ -39,7 +39,8 @@ from vllm.sampling_params import BeamSearchParams, SamplingParams
 from vllm.sequence import Logprob
 from vllm.transformers_utils.tokenizer import AnyTokenizer, MistralTokenizer
 from vllm.transformers_utils.tokenizers import (maybe_serialize_tool_calls,
-                                                truncate_tool_call_ids)
+                                                truncate_tool_call_ids,
+                                                validate_request_params)
 
 logger = init_logger(__name__)
 
@@ -57,8 +58,7 @@ class OpenAIServingChat(OpenAIServing):
         chat_template: Optional[str],
         chat_template_content_format: ChatTemplateContentFormatOption,
         return_tokens_as_token_ids: bool = False,
-        enable_reasoning: bool = False,
-        reasoning_parser: Optional[str] = None,
+        reasoning_parser: str = "",
         enable_auto_tools: bool = False,
         tool_parser: Optional[str] = None,
         enable_prompt_tokens_details: bool = False,
@@ -81,18 +81,17 @@ class OpenAIServingChat(OpenAIServing):
                 " the parallel_tool_calls client option is preset for "
                 "compatibility reasons, it will be ignored.")
 
-        self.enable_reasoning: bool = enable_reasoning
         self.reasoning_parser: Optional[Callable[[AnyTokenizer],
                                                  ReasoningParser]] = None
-        if self.enable_reasoning:
+        if reasoning_parser:
             try:
                 self.reasoning_parser = (
                     ReasoningParserManager.get_reasoning_parser(
                         reasoning_parser))
+                assert self.reasoning_parser is not None
             except Exception as e:
-                raise TypeError("Error: --enable-reasoning requires "
-                                f"reasoning_parser:'{reasoning_parser}' "
-                                "which has not been registered") from e
+                raise TypeError(
+                    f"{reasoning_parser=} has not been registered") from e
         self.tool_parser: Optional[Callable[[AnyTokenizer], ToolParser]] = None
         if self.enable_auto_tools:
             try:
@@ -159,6 +158,7 @@ class OpenAIServingChat(OpenAIServing):
                 # for more info: see comment in `maybe_serialize_tool_calls`
                 maybe_serialize_tool_calls(request)
                 truncate_tool_call_ids(request)
+                validate_request_params(request)
 
             if (request.tool_choice == "auto" and
                     not (self.enable_auto_tools and tool_parser is not None)
@@ -204,14 +204,13 @@ class OpenAIServingChat(OpenAIServing):
         request_metadata = RequestResponseMetadata(request_id=request_id)
         if raw_request:
             raw_request.state.request_metadata = request_metadata
-        
+
         # [METRICS] Capture the server start time as soon as processing begins.
         start_time = time.time()
         # [METRICS] Inject the captured server_start_time into the metadata (bypassing Pydantic validation).
         object.__setattr__(request_metadata, "server_start_time", start_time)
 
-        # Schedule the request and get the result generator.
-        generators: list[AsyncGenerator[RequestOutput, None]] = []
+        generators: List[AsyncGenerator[RequestOutput, None]] = []
         try:
             for i, engine_prompt in enumerate(engine_prompts):
                 sampling_params: Union[SamplingParams, BeamSearchParams]
@@ -414,7 +413,6 @@ class OpenAIServingChat(OpenAIServing):
         first_token_recorded = False
         ttft = None  # Time-To-First-Token
 
-        # Send response for each token for each request.n (index)
         num_choices = 1 if request.n is None else request.n
         previous_num_tokens = [0] * num_choices
         finish_reason_sent = [False] * num_choices
@@ -431,15 +429,12 @@ class OpenAIServingChat(OpenAIServing):
             not tool_choice_function_name
             and self._should_stream_with_auto_tool_parsing(request))
 
-        should_stream_with_reasoning_parsing = (
-            self._should_stream_with_reasoning_parsing(request))
-
         all_previous_token_ids: Optional[list[list[int]]]
         function_name_returned: Optional[list[bool]] = None
 
         # Only one of these will be used, thus previous_texts and
         # all_previous_token_ids will not be used twice in the same iteration.
-        if tool_choice_auto or should_stream_with_reasoning_parsing:
+        if tool_choice_auto or self.reasoning_parser:
             # These are only required in "auto" tool choice case
             previous_texts = [""] * num_choices
             all_previous_token_ids = [[]] * num_choices
@@ -454,12 +449,7 @@ class OpenAIServingChat(OpenAIServing):
             previous_texts, all_previous_token_ids = None, None
 
         try:
-            # There is no need to check if the reasoning_parser is None
-            # because the should_stream_with_reasoning_parsing check
-            # already ensures that the reasoning_parser is not None.
-            # but the pre-commit hook requires it.
-            if should_stream_with_reasoning_parsing and \
-                self.reasoning_parser is not None:
+            if self.reasoning_parser:
                 reasoning_parser = self.reasoning_parser(tokenizer)
         except RuntimeError as e:
             logger.exception("Error in reasoning parser creation.")
@@ -467,7 +457,6 @@ class OpenAIServingChat(OpenAIServing):
             yield f"data: {data}\n\n"
             yield "data: [DONE]\n\n"
             return
-
         # Prepare the tool parser if it's needed
         try:
             if tool_choice_auto and self.tool_parser:
@@ -573,6 +562,8 @@ class OpenAIServingChat(OpenAIServing):
                         first_token_recorded = True
                     first_iteration = False
 
+                # ... (processing each output as in original code; no metric changes here) ...
+
                 # [METRICS] After finishing token streaming, compute E2E latency.
                 e2e_latency = time.time() - server_start_time
 
@@ -607,7 +598,7 @@ class OpenAIServingChat(OpenAIServing):
                     delta_message: Optional[DeltaMessage]
 
                     # just update previous_texts and previous_token_ids
-                    if tool_choice_auto or should_stream_with_reasoning_parsing:
+                    if tool_choice_auto or self.reasoning_parser:
                         assert previous_texts is not None
                         assert all_previous_token_ids is not None
                         previous_text = previous_texts[i]
@@ -618,7 +609,7 @@ class OpenAIServingChat(OpenAIServing):
 
                     # handle streaming deltas for tools with named tool_choice
                     if tool_choice_function_name:
-                        if (self.enable_reasoning
+                        if (self.reasoning_parser
                                 and not reasoning_parser.is_reasoning_end(
                                     previous_token_ids)):
                             assert reasoning_parser is not None
@@ -645,7 +636,7 @@ class OpenAIServingChat(OpenAIServing):
                                     current_text = ""
                         else:
                             # Just to add remaining `content`
-                            if self.enable_reasoning:
+                            if self.reasoning_parser:
                                 delta_text = previous_text + delta_text
                                 current_text = ""
 
@@ -675,7 +666,7 @@ class OpenAIServingChat(OpenAIServing):
 
                     # handle streaming deltas for tools with "auto" tool choice
                     # and reasoning parser
-                    elif tool_choice_auto and self.enable_reasoning:
+                    elif tool_choice_auto and self.reasoning_parser:
                         assert tool_parser is not None
                         assert reasoning_parser is not None
                         assert added_content_delta_arr is not None
@@ -743,8 +734,7 @@ class OpenAIServingChat(OpenAIServing):
                                 delta_token_ids=output.token_ids,
                                 request=request))
                     # when only reasoning
-                    elif self.enable_reasoning:
-                        assert reasoning_parser is not None
+                    elif self.reasoning_parser:
                         delta_message = (reasoning_parser.
                                          extract_reasoning_content_streaming(
                                              previous_text,
@@ -759,7 +749,7 @@ class OpenAIServingChat(OpenAIServing):
                         delta_message = DeltaMessage(content=delta_text)
 
                     # update the previous values for the next iteration
-                    if tool_choice_auto or should_stream_with_reasoning_parsing:
+                    if tool_choice_auto or self.reasoning_parser:
                         assert previous_texts is not None
                         assert all_previous_token_ids is not None
                         previous_texts[i] = current_text
@@ -871,8 +861,7 @@ class OpenAIServingChat(OpenAIServing):
                 completion_tokens = sum(previous_num_tokens)
                 final_usage = UsageInfo(prompt_tokens=num_prompt_tokens,
                                         completion_tokens=completion_tokens,
-                                        total_tokens=num_prompt_tokens +
-                                        completion_tokens)
+                                        total_tokens=num_prompt_tokens + completion_tokens)
                 # [METRICS] Inject captured TTFT and E2E latency into usage.
                 final_usage.server_ttft = ttft
                 final_usage.server_e2e_latency = e2e_latency
@@ -959,17 +948,9 @@ class OpenAIServingChat(OpenAIServing):
                 )
             else:
                 logprobs = None
-
-            should_stream_with_reasoning_parsing = (
-                self._should_stream_with_reasoning_parsing(request))
-
-            # In the OpenAI API the finish_reason is "tools_called"
-            # if the tool choice is auto and the model produced a tool
-            # call. The same is not true for named function calls
             auto_tools_called = False
 
-            if should_stream_with_reasoning_parsing and \
-                self.reasoning_parser is not None:
+            if self.reasoning_parser:
                 try:
                     reasoning_parser = self.reasoning_parser(tokenizer)
                 except RuntimeError as e:
@@ -1113,7 +1094,7 @@ class OpenAIServingChat(OpenAIServing):
         if self.enable_prompt_tokens_details and final_res.num_cached_tokens:
             usage.prompt_tokens_details = PromptTokenUsageInfo(
                 cached_tokens=final_res.num_cached_tokens)
-        
+
         # [METRICS] Compute overall E2E latency and inject metrics.
         e2e_latency = time.time() - server_start_time
         usage.server_ttft = ttft
@@ -1164,7 +1145,8 @@ class OpenAIServingChat(OpenAIServing):
             return_as_token_id is not None else self.return_tokens_as_token_ids
         for i, token_id in enumerate(token_ids):
             step_top_logprobs = top_logprobs[i]
-            if step_top_logprobs is None:
+            if step_top_logprobs is None or step_top_logprobs.get(
+                    token_id) is None:
                 token = tokenizer.decode(token_id)
                 if should_return_as_token_id:
                     token = f"token_id:{token_id}"
@@ -1208,17 +1190,6 @@ class OpenAIServingChat(OpenAIServing):
         """
         return (request.tools and self.tool_parser and self.enable_auto_tools
                 and request.tool_choice in ['auto', None])
-
-    def _should_stream_with_reasoning_parsing(self,
-                                              request: ChatCompletionRequest):
-        """
-            Utility function to check if streamed tokens should go through the
-            reasoning parser that was configured.
-    
-            We only want to do this IF reasoning is enabled and a reasoning 
-            parser is configured.
-            """
-        return self.enable_reasoning and self.reasoning_parser is not None
 
     def _should_check_for_unstreamed_tool_arg_tokens(
         self,
