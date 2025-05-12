@@ -18,6 +18,9 @@ export VLLM_FP8_WEIGHT_PADDING=1
 export VLLM_FP8_REDUCE_CONV=1
 export HIP_FORCE_DEV_KERNARG=1
 
+# Copy serving_chat.py
+cp  $USER/InflightBatching/vLLM0424/serving_chat_0509.py \
+    /usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py
 
 # Function to parse options from any order of arguments
 # Function to parse options from any order of arguments
@@ -84,14 +87,14 @@ fi
 
 # Locust settings
 DURATION=3m # 3 minutes
-I_FOLDER=$USER/POC_RFP/vllm/Llama3.1/Datasets
+I_FOLDER=$USER/InflightBatching/Datasets
 # For the 70B model, H100 runs with TP=4, so MI300X processes the batch size at one-fourth that of the H100.
 # H100 Users=(1 8 16 24 32 40 48 56 64) 
 N_USER=(1 2 4 6 8 10 12 14 16) 
 N_USER=(8 10 12 14 16) 
 I_FILE=(2000.txt 4000.txt 8500.txt)
 O_LEN=(200 200 200)
-Locust_File=$USER/POC_RFP/vllm/Llama3.1/scripts/vLLM_OpenaiMetric/locustfile.py
+Locust_File=$USER/InflightBatching/vLLM0424/locustfile.py # or locustfile_RandomDataset.py for fully randomized datasets
 
 # Debug usage. Less cases
 # DURATION=10s
