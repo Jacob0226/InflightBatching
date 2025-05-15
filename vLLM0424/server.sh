@@ -19,7 +19,7 @@ export VLLM_FP8_REDUCE_CONV=1
 export HIP_FORCE_DEV_KERNARG=1
 
 # Copy serving_chat.py
-cp  $USER/InflightBatching/vLLM0424/serving_chat_0509.py \
+cp  $USER/InflightBatching/vLLM0424/serving_chat_May09.py \
     /usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py
 
 # Function to parse options from any order of arguments
@@ -96,14 +96,14 @@ O_LEN=(200 200 200)
 Locust_File=$USER/InflightBatching/vLLM0424/locustfile.py # or locustfile_RandomDataset.py for fully randomized datasets
 
 # Debug usage. Less cases
-# DURATION=10s
+DURATION=10s
 # N_USER=(1 8)
 # O_LEN=(150)
 # I_FILE=(2000.txt)
 
 # Output 
 # meta-llama/Llama-3.1-8B -> meta-llama_Llama-3.1-8B
-out_root_folder="Result/0512/Test"
+out_root_folder="Result/0515/Debug"
 if [[ "$V1_FLAG" == "True" ]]; then
   result_folder="$out_root_folder/$(basename "$MODEL_NAME")_V1"
 else
