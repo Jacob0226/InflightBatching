@@ -2,8 +2,8 @@
 set -x
 
 # Sample cmd:
-#   ./run_benchmark_serving_FixedSeed.sh --model-name meta-llama/Llama-3.1-8B  [--v0/--v1]
-#   ./run_benchmark_serving_FixedSeed.sh --model-name amd/Llama-3.3-70B-Instruct-FP8-KV [--v0/--v1]
+#   ./run_benchmark_serving.sh --model-name meta-llama/Llama-3.1-8B  [--v0/--v1]
+#   ./run_benchmark_serving.sh --model-name amd/Llama-3.3-70B-Instruct-FP8-KV [--v0/--v1]
 
 # Env var:
 export VLLM_USE_TRITON_FLASH_ATTN=0
