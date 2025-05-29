@@ -341,10 +341,10 @@ class RandomDataset(BenchmarkDataset):
             #     (offsets[i] + i + np.arange(input_lens[i])) % vocab_size
             # ).tolist()
             # [Jacob] Extreme case: the prompts are the same
-            inner_seq = (np.arange(input_lens[i])+50).tolist()
+            inner_seq = ((0 + np.arange(input_lens[i])) % vocab_size).tolist()
             token_sequence = prefix_token_ids + inner_seq
             prompt = tokenizer.decode(token_sequence)
-            print(f"[DEBUG] id={i}, prompt[:10]={prompt[:10]}")
+            print(f"[DEBUG] id={i}, prompt[:10]={prompt[:20]}")
             # After decoding the prompt we have to encode and decode it again.
             # This is done because in some cases N consecutive tokens
             # give a string tokenized into != N number of tokens.
